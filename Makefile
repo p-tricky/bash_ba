@@ -50,4 +50,6 @@ $(SH_EXEC): $(SH_OBJ) $(DEPS)
 #https://www.gnu.org/software/make/manual/html_node/Cleanup.html#Cleanup
 .PHONY: clean
 clean:
-	find . -maxdepth 1 -type f -executable ! -iname "*.sh" ! -iname "*.c" -exec rm -f {} +
+	find . -maxdepth 1 -type f -perm +111 ! -name "*.sh" -exec rm {} +
+	find . -maxdepth 1 -type f -name "*.o" -print -exec rm {} +
+

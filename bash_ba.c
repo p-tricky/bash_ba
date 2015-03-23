@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include "apue.h"
 #include <sys/wait.h>
+#include <signal.h>
 
 /*
  * Make argv array (*argvp) for tokens in s which are separated by
@@ -20,7 +21,8 @@ char *get_line_from_stdin(void)
 
 int spawn_child(int my_std_in, int my_std_out, char **args) 
 {
-  pid_t pid, wpid;
+  pid_t pid; 
+  pid_t wpid = 0;
   int status;
 
   // creates new proc without copying parent's address space
@@ -76,6 +78,51 @@ int spawn_children(int num_children, char ***cmds)
   return 0;
 }
 
+// built-ins
+char *builtins[] = {
+  "cd",
+  "exit",
+  "kill",
+};
+
+int my_cd(char *path) {
+  if (path == NULL) {
+    write(STDOUT_FILENO, "bash_ba: cd expects full path argument\n", 39); //temporary
+  } else {
+    if (chdir(path) != 0) {
+      err_ret("bash_ba");
+    }
+  }
+  return 1;
+}
+
+int my_kill(char *child_str) {
+  int child = atoi(child_str);
+  kill(child, SIGQUIT);
+  return 1;
+}
+
+int my_exit(char *args) {
+  exit(0);
+  return 1;
+}
+
+int (*ptrs_to_builtin_funcs[]) (char *) = {
+  &my_cd,
+  &my_exit,
+  &my_kill,
+};
+
+int try_exec_builtin(char *builtin, char *arg) 
+{
+  int num_builtins = sizeof(builtins) / sizeof(char*);
+  for (int i=0; i<num_builtins; i++) {
+    if (strcmp(builtin, builtins[i]) == 0) {
+      return (*ptrs_to_builtin_funcs[i])(arg);
+    }
+  }
+  return 0;
+}
 
 int main() 
 {
@@ -89,6 +136,10 @@ int main()
     char ***cmds = malloc(num_children*sizeof(char *));
     for (int child=0; child<num_children; child++) {
       makeargv(children[child], " ", &cmds[child]); 
+    }
+    if (num_children == 1) {
+      int try = try_exec_builtin(cmds[0][0], cmds[0][1]);
+      if (try == 1) continue;
     }
     spawn_children(num_children, cmds);
     free(cmds);

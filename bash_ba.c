@@ -11,6 +11,9 @@
  * delimiters.   Return -1 on error or the number of tokens otherwise.
  */
 int makeargv(char *s, char *delimiters, char ***argvp);
+
+// global variable for keeping track of whether running in bg or fg
+static int fg = 1;
 char *get_line_from_stdin(void)
 {
   char *line = NULL;
@@ -46,12 +49,15 @@ int spawn_child(int my_std_in, int my_std_out, char **args)
     err_sys("Failed fork");
   } 
   else { //parent
-    do {
-      // wait for child to finish (WUNTRACED returns and reports stopped processes)
-      wpid = waitpid(pid, &status, WUNTRACED);
-    } while (!WIFEXITED(status) && !WIFSIGNALED(status)); //check to see if child status returned
+    //printf("fg: %d\n", fg);
+    //fflush(stdout);
+    if (fg) {
+      do {
+        // wait for child to finish (WUNTRACED returns and reports stopped processes)
+        wpid = waitpid(pid, &status, WUNTRACED);
+      } while (!WIFEXITED(status) && !WIFSIGNALED(status)); //check to see if child status returned
+    }
   }
-
   // 0 if ok, -1 if error
   return wpid;
 }
@@ -104,7 +110,6 @@ int my_kill(char *child_str) {
 
 int my_exit(char *args) {
   exit(0);
-  return 1;
 }
 
 int (*ptrs_to_builtin_funcs[]) (char *) = {
@@ -128,14 +133,26 @@ int main()
 {
   char **children;
   char *line;
+  char *line_no_leading_spaces;
+  char *delim;
   int num_children;
   do {
     write(STDOUT_FILENO, "\n> ", 3);
     line = get_line_from_stdin();
+    line_no_leading_spaces = line + strspn(line, " "); 
+    if (!strcmp(line_no_leading_spaces, "\n")) continue;
     num_children = makeargv(line, "|\n", &children);
     char ***cmds = malloc(num_children*sizeof(char *));
     for (int child=0; child<num_children; child++) {
-      makeargv(children[child], " ", &cmds[child]); 
+      int last_cmd = ( child == num_children-1 );
+      delim = last_cmd ? " &" : " ";
+      int last_token = makeargv(children[child], " ", &cmds[child]) -1;
+      if (last_cmd) { 
+        fg = strcmp(cmds[child][last_token], "&");
+        //printf("fg: %d\n", fg);
+        //fflush(stdout);
+        if (!fg) cmds[child][last_token] = NULL;
+      }
     }
     if (num_children == 1) {
       int try = try_exec_builtin(cmds[0][0], cmds[0][1]);

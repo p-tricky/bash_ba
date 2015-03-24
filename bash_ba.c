@@ -1,6 +1,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include "apue.h"
 #include <sys/wait.h>
@@ -67,7 +68,29 @@ int spawn_children(int num_children, char ***cmds)
   //backup stdin
   int stdin_bak = dup(0);
   int child_std_in = 0;
+  int final_stdout = 1; //where output goes once entire cmd (including pipes) has completed 
   int fd[2];
+  char *token;
+  // handle redirection in
+  char redirection_detected = 0;
+  for (int i=0; (token=cmds[0][i]) != NULL; i++) {
+    if (!redirection_detected && !strcmp(token, "<")) {
+      child_std_in = open(cmds[0][i+1], O_RDONLY);
+      if (child_std_in < 0) {
+        err_ret(cmds[0][i+1]); 
+        return 1;
+      }
+      // remove the "<" token and the file name token that follows from list
+      // of tokens for first cmd
+      cmds[0][i] = NULL;
+      cmds[0][++i] = NULL; // increment i, so that we skip the now null file name token
+      redirection_detected = 1;
+    }
+    else if (redirection_detected) { // need to move tokens up 2 positions in arg list
+      cmds[0][i-2] = cmds[0][i];
+      cmds[0][i] = NULL;
+    }
+  }
 
   for (int child=0; child<num_children-1; child++) {
     pipe(fd);
@@ -76,9 +99,37 @@ int spawn_children(int num_children, char ***cmds)
     close(fd[1]); //the child is done writing to the pipe, so we can close the write end
     child_std_in=fd[0]; //the next childs stdin should be the read end of the pipe that this child wrote
   }
+  // handle redirection out
   int last_child = num_children-1;
   if (child_std_in != 0) dup2(child_std_in, 0);
-  spawn_child(child_std_in, 1, cmds[last_child]);
+  mode_t final_stdout_mode = O_RDWR | O_CREAT;
+  for (int i=0; (token=cmds[last_child][i]) != NULL; i++) {
+    if (!strcmp(token, ">")) {
+      final_stdout = open(cmds[last_child][i+1], final_stdout_mode, 0644);
+      if (child_std_in < 0) {
+        err_ret(cmds[last_child][i+1]); 
+        return 1;
+      }
+      // remove the ">" token and the file name token that follows from list
+      // of tokens for first cmd
+      cmds[last_child][i] = NULL;
+      cmds[last_child][i+1] = NULL; // increment i, so that we skip the now null file name token
+      break;
+    }
+    if (!strcmp(token, ">>")) {
+      final_stdout = open(cmds[last_child][i+1], final_stdout_mode|O_APPEND, 0644);
+      if (child_std_in < 0) {
+        err_ret(cmds[last_child][i+1]); 
+        return 1;
+      }
+      // remove the ">" token and the file name token that follows from list
+      // of tokens for first cmd
+      cmds[last_child][i] = NULL;
+      cmds[last_child][i+1] = NULL; // increment i, so that we skip the now null file name token
+      break;
+    }
+  }
+  spawn_child(child_std_in, final_stdout, cmds[last_child]);
   dup2(stdin_bak, 0);
   close(stdin_bak);
   return 0;

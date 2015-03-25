@@ -20,8 +20,8 @@ UP_OBJ = Up.o error.o
 UP_EXEC = Up
 
 # Shell
-SH_SRC = bash_ba.c makeargv.c error.c
-SH_OBJ = bash_ba.o makeargv.o error.o
+SH_SRC = bash_ba.c makeargv.c error.c path_alloc.c
+SH_OBJ = bash_ba.o makeargv.o error.o path_alloc.o
 SH_EXEC = bash_ba
 
 #.PHONY declaration just says that 'all' isn't a file name.

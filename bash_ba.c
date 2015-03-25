@@ -13,8 +13,12 @@
  */
 int makeargv(char *s, char *delimiters, char ***argvp);
 
-// global variable for keeping track of whether running in bg or fg
-static int fg = 1;
+// global variables 
+static int fg = 1;   //for keeping track of whether running in bg or fg
+static char *home = NULL;
+char *cwd;
+int cwd_size;
+
 char *get_line_from_stdin(void)
 {
   char *line = NULL;
@@ -143,12 +147,14 @@ char *builtins[] = {
 };
 
 int my_cd(char *path) {
-  if (path == NULL) {
-    write(STDOUT_FILENO, "bash_ba: cd expects full path argument\n", 39); //temporary
-  } else {
-    if (chdir(path) != 0) {
-      err_ret("bash_ba");
-    }
+  char cwd_reset = 0;
+  if (path == NULL && chdir(home) == 0) cwd_reset = 1;
+  else if (path != NULL && chdir(path) == 0) cwd_reset = 1;
+  else err_ret(path);
+  
+  if (cwd_reset) {
+    cwd = path_alloc(cwd, &cwd_size);
+    if (getcwd(cwd, cwd_size) == NULL) err_sys("getcwd fail");
   }
   return 1;
 }
@@ -182,13 +188,15 @@ int try_exec_builtin(char *builtin, char *arg)
 
 int main() 
 {
-  char **children;
-  char *line;
-  char *line_no_leading_spaces;
-  char *delim;
+  char **children, *line, *line_no_leading_spaces, *delim;
+  home = getenv("HOME");
   int num_children;
   do {
-    write(STDOUT_FILENO, "\n> ", 3);
+    cwd = path_alloc(cwd, &cwd_size);
+    if (getcwd(cwd, cwd_size) == NULL) err_sys("getcwd fail");
+    write(STDOUT_FILENO, "\n", 1);
+    if (cwd) write(STDOUT_FILENO, cwd, strlen(cwd));
+    write(STDOUT_FILENO, "> ", 2);
     line = get_line_from_stdin();
     line_no_leading_spaces = line + strspn(line, " "); 
     if (!strcmp(line_no_leading_spaces, "\n")) continue;
@@ -213,5 +221,6 @@ int main()
     free(cmds);
   } while (1);
 
+  exit(0);
 }
 

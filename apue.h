@@ -27,7 +27,7 @@ typedef	void	Sigfunc(int);	/* for signal handlers */
 #define	max(a,b)	((a) > (b) ? (a) : (b))
 
 					/* prototypes for our own functions */
-char	*path_alloc(int *);			/* {Prog pathalloc} */
+char	*path_alloc(char *, int *); /* {Prog pathalloc} */
 int		 open_max(void);			/* {Prog openmax} */
 void	 clr_fl(int, int);			/* {Prog setfl} */
 void	 set_fl(int, int);			/* {Prog setfl} */

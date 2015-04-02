@@ -1,4 +1,4 @@
-CC=clang
+CC=gcc
 CFLAGS=-g -O0 -Wall -std=c99
 #add headers to DEPS, otherwise make wont detect changes and recompile
 #when headers change
@@ -11,7 +11,7 @@ SH_EXEC = bash_ba
 
 #.PHONY declaration just says that 'all' isn't a file name.
 .PHONY: all
-all: $(DED_EXEC) $(PED_EXEC) $(UP_EXEC) $(SH_EXEC)
+all: $(SH_EXEC)
 
 #compile all .o into executable
 #%.o == all .o files

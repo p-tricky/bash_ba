@@ -1,10 +1,11 @@
+#include "apue.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include "apue.h"
 #include <sys/wait.h>
+#include <sys/types.h>
 #include <signal.h>
 
 /*
@@ -75,6 +76,7 @@ int spawn_children(int num_children, char ***cmds)
   int final_stdout = 1; //where output goes once entire cmd (including pipes) has completed 
   int fd[2];
   char *token;
+
   // handle redirection in
   char redirection_detected = 0;
   for (int i=0; (token=cmds[0][i]) != NULL; i++) {
@@ -95,7 +97,9 @@ int spawn_children(int num_children, char ***cmds)
       cmds[0][i] = NULL;
     }
   }
-
+  
+  int fg_bak = fg; //save state for last child
+  fg = 0; //all children run in background until last
   for (int child=0; child<num_children-1; child++) {
     pipe(fd);
     //fd[1] is now write end of pipe, fd[0] is read end of pipe
@@ -103,6 +107,7 @@ int spawn_children(int num_children, char ***cmds)
     close(fd[1]); //the child is done writing to the pipe, so we can close the write end
     child_std_in=fd[0]; //the next childs stdin should be the read end of the pipe that this child wrote
   }
+
   // handle redirection out
   int last_child = num_children-1;
   if (child_std_in != 0) dup2(child_std_in, 0);
@@ -114,7 +119,7 @@ int spawn_children(int num_children, char ***cmds)
         err_ret(cmds[last_child][i+1]); 
         return 1;
       }
-      // remove the ">" token and the file name token that follows from list
+      // remove the redirection token and the file name token that follows from list
       // of tokens for first cmd
       cmds[last_child][i] = NULL;
       cmds[last_child][i+1] = NULL; // increment i, so that we skip the now null file name token
@@ -126,13 +131,15 @@ int spawn_children(int num_children, char ***cmds)
         err_ret(cmds[last_child][i+1]); 
         return 1;
       }
-      // remove the ">" token and the file name token that follows from list
+      // remove the redirection token and the file name token that follows from list
       // of tokens for first cmd
       cmds[last_child][i] = NULL;
       cmds[last_child][i+1] = NULL; // increment i, so that we skip the now null file name token
       break;
     }
   }
+
+  fg = fg_bak; //restore fg so that we are only running last child process in background if we were told to
   spawn_child(child_std_in, final_stdout, cmds[last_child]);
   dup2(stdin_bak, 0);
   close(stdin_bak);
@@ -188,36 +195,74 @@ int try_exec_builtin(char *builtin, char *arg)
 
 int main() 
 {
-  char **children, *line, *line_no_leading_spaces, *delim;
+  // initialize vars
+  char **children, *line, *line_no_leading_spaces;
   home = getenv("HOME");
-  int num_children;
+  int child, num_children;
+  cwd = path_alloc(cwd, &cwd_size);
+  getcwd(cwd, cwd_size);
+
+  // main loop
   do {
-    cwd = path_alloc(cwd, &cwd_size);
-    if (getcwd(cwd, cwd_size) == NULL) err_sys("getcwd fail");
+    // get cwd and write it to beginning of cmd prompt
     write(STDOUT_FILENO, "\n", 1);
     if (cwd) write(STDOUT_FILENO, cwd, strlen(cwd));
     write(STDOUT_FILENO, "> ", 2);
+
+    // read input from cmd prompt and skip commands that start with white space
     line = get_line_from_stdin();
     line_no_leading_spaces = line + strspn(line, " "); 
     if (!strcmp(line_no_leading_spaces, "\n")) continue;
+
+    // children is a char**. each char* points to a child.
+    // I use the term child to describe a section of input that will be forked
+    // into its own process
+    //
+    // mapping input to corresponding char **children would look like
+    //    ls                => [["ls"]];                   (child 0 = ["ls"]
+    //    ls -la            => [["ls -la"]];               (child 0 = ["ls -la"]
+    //    ls -la | grep dup => [["ls -la"]["grep dup"]]    (child 0 = ["ls -la"], child 1 = ["grep dup"])
     num_children = makeargv(line, "|\n", &children);
+
+    // cmds is a char***. each char* points to a token within a child.
+    //
+    // a similar mapping would look like
+    //    ls                => [[["ls"]]];                   
+    //    ls -la            => [ [ ["ls"], ["-la"] ] ];      (child 0 = [["ls"], ["-la"]], token 0 = ["ls"]
+    //    ls -la | grep dup => [ [ ["ls"],   ["-la"] ], 
+    //                           [ ["grep"], ["dup"] ] ]     
     char ***cmds = malloc(num_children*sizeof(char *));
-    for (int child=0; child<num_children; child++) {
-      int last_cmd = ( child == num_children-1 );
-      delim = last_cmd ? " &" : " ";
-      int last_token = makeargv(children[child], " ", &cmds[child]) -1;
-      if (last_cmd) { 
-        fg = strcmp(cmds[child][last_token], "&");
-        //printf("fg: %d\n", fg);
-        //fflush(stdout);
-        if (!fg) cmds[child][last_token] = NULL;
-      }
+    for (child=0; child<num_children-1; child++) {
+      makeargv(children[child], " ", &cmds[child]);
     }
+
+    // the last child is special.
+    // if last child ends with &, then we have to wait for it
+    // we also have to remove the & from the cmds char*** so that it doesn't
+    // throw errors when we exec.
+    int last_token = makeargv(children[child], " ", &cmds[child]) -1;
+    unsigned long last_token_idx = strlen(cmds[child][last_token]) -1;
+    fg = strcmp(cmds[child][last_token] + last_token_idx, "&"); //if ends in &, sets fg (foreground) to 0
+    if (!fg && last_token_idx) *(cmds[child][last_token]+last_token_idx) = '\0'; //removes & in the case that  
+                                                      //there are no spaces between last child and cmd (e.g., ls&)
+    else if (!fg) cmds[child][last_token] = NULL; //removes & in the case that there are spaces (e.g., ls &)
+
+    // if no pipes try to satisfy child with builtin
+    // if child satisfied, then restart loop
+    // else spawn child processes 0x605100
     if (num_children == 1) {
       int try = try_exec_builtin(cmds[0][0], cmds[0][1]);
-      if (try == 1) continue;
+      if (try == 1) goto reentry;
     }
     spawn_children(num_children, cmds);
+
+reentry:
+    for(child=0; child<num_children; child++) {
+      free(cmds[child][0]);
+      free(cmds[child]);
+    }
+    free(children[0]);
+    free(children);
     free(cmds);
   } while (1);
 
